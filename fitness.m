@@ -1,67 +1,52 @@
 function fitness = fitnessFunction(selected_features, X, Y)
-% FITNESSFUNCTION Evaluates quality of selected feature subset
 % Inputs:
-%   selected_features - binary vector (1 = selected, 0 = not selected)
-%   X                 - feature matrix [samples x features]
-%   Y                 - class labels [samples x 1]
+%   selected_features - binary vector from IBSWO (1=selected, 0=not)
+%   X                 - feature matrix [n x f]
+%   Y                 - class labels [n x 1]
 % Output:
-%   fitness           - fitness value (lower is better)
+%   fitness           - scalar (lower = better)
 
-    % --- Parameters ---
-    alpha = 0.99;   % weight for classification error
-    beta  = 0.01;   % weight for feature count penalty
+    % --- Weights ---
+    alpha = 0.99;  % classification error weight
+    beta  = 0.01;  % feature count penalty weight
 
-    % --- Total number of features ---
     total_features = size(X, 2);
 
-    % --- Handle case: no features selected ---
+    % --- No features selected edge case ---
     if sum(selected_features) == 0
-        fitness = 1;   % worst possible fitness
+        fitness = 1;
         return;
     end
 
-    % --- Extract selected feature columns ---
+    % --- Apply binary mask ---
     X_selected = X(:, logical(selected_features));
 
-    % --- Classification using K-Nearest Neighbor (KNN) ---
+    % --- KNN with 10-fold Cross Validation ---
     k = 5;
-    indices = crossvalind('Kfold', Y, 10);   % 10-fold cross-validation
-    
+    cv = cvpartition(Y, 'KFold', 10, 'Stratify', true);
+
     correct = 0;
     total   = 0;
-    
-    for fold = 1:10
-        test_idx  = (indices == fold);
-        train_idx = ~test_idx;
 
-        X_train = X_selected(train_idx, :);
-        Y_train = Y(train_idx);
-        X_test  = X_selected(test_idx,  :);
-        Y_test  = Y(test_idx);
+    for fold = 1:cv.NumTestSets
 
-        % Train and predict
-        mdl        = fitcknn(X_train, Y_train, 'NumNeighbors', k);
-        Y_pred     = predict(mdl, X_test);
-        correct    = correct + sum(Y_pred == Y_test);
-        total      = total   + numel(Y_test);
+        X_train = X_selected(cv.training(fold), :);
+        Y_train = Y(cv.training(fold));
+        X_test  = X_selected(cv.test(fold),     :);
+        Y_test  = Y(cv.test(fold));
+
+        mdl    = fitcknn(X_train, Y_train, 'NumNeighbors', k, ...
+                         'Distance', 'euclidean');
+        Y_pred = predict(mdl, X_test);
+
+        correct = correct + sum(Y_pred == Y_test);
+        total   = total   + numel(Y_test);
+
     end
 
-    % --- Classification Error Rate ---
-    error_rate = 1 - (correct / total);
-
-    % --- Feature Ratio (penalty for using many features) ---
+    % --- Fitness ---
+    error_rate    = 1 - (correct / total);
     feature_ratio = sum(selected_features) / total_features;
-
-    % --- Final Fitness (lower is better) ---
-    fitness = alpha * error_rate + beta * feature_ratio;
+    fitness       = alpha * error_rate + beta * feature_ratio;
 
 end
-```
-
----
-
-### How the fitness function works
-
-**Formula:**
-```
-fitness = α × error_rate + β × feature_ratio
