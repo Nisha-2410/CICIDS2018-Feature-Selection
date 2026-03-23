@@ -1,63 +1,57 @@
-function [weights, selected_idx] = relief(X, y, m)
+function [weights, selected_idx] = relief(X, y, m, k)
 
 [n, f] = size(X);
 
 weights = zeros(1,f);
 
+% Feature range (for normalization)
+range_f = max(X) - min(X) + eps;
+
 for i = 1:m
     
-    % Random Instance
+    % Random sample
     r = randi(n);
     Ri = X(r,:);
     yi = y(r);
     
-    % Distance from all points
-    dist = sum((X - Ri).^2,2);
+    % Compute distances (vectorized)
+    dist = sum((X - Ri).^2, 2);
     
-    % Nearest Hit and Miss
-    hit_dist = inf;
-    miss_dist = inf;
+    % Sort neighbors
+    [~, idx_sorted] = sort(dist);
     
-    for j = 1:n
-        
-        if j == r
-            continue;
-        end
-        
-        if y(j) == yi
-            if dist(j) < hit_dist
-                hit = X(j,:);
-                hit_dist = dist(j);
-            end
-        else
-            if dist(j) < miss_dist
-                miss = X(j,:);
-                miss_dist = dist(j);
-            end
-        end
-        
+    % Remove itself
+    idx_sorted(idx_sorted == r) = [];
+    
+    % Find hits and misses
+    hit_idx = idx_sorted(y(idx_sorted) == yi);
+    miss_idx = idx_sorted(y(idx_sorted) ~= yi);
+    
+    % Take k nearest
+    hit_idx = hit_idx(1:min(k, length(hit_idx)));
+    miss_idx = miss_idx(1:min(k, length(miss_idx)));
+    
+    % Compute updates
+    for h = 1:length(hit_idx)
+        hit = X(hit_idx(h),:);
+        weights = weights - abs(Ri - hit) ./ range_f;
     end
     
-    % Weight Update
-    for k = 1:f
-        
-        weights(k) = weights(k) ...
-            + (Ri(k)-miss(k))^2 ...
-            - (Ri(k)-hit(k))^2;
-        
+    for m_i = 1:length(miss_idx)
+        miss = X(miss_idx(m_i),:);
+        weights = weights + abs(Ri - miss) ./ range_f;
     end
     
 end
 
-% Normalize weights
+% Normalize
 weights = weights / m;
 
-% Select features (Paper threshold)
-[~, ranked_idx] = sort(weights,'descend');
+% Rank features
+[~, ranked_idx] = sort(weights, 'descend');
 
-num_keep = round(0.6 * f);   % keep top 60%
-
+% Keep top features
+num_keep = round(0.6 * f);
 selected_idx = ranked_idx(1:num_keep);
-
 
 end

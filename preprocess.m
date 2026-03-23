@@ -2,143 +2,152 @@ clc;
 clear;
 close all;
 
-disp('Loading merged dataset...')
-
-load('merged_dataset.mat');   % contains variable "data"
+disp("Loading merged dataset...")
+load('merged_dataset.mat');   % variable: data
 
 fprintf("Original Samples: %d\n", height(data));
 fprintf("Original Features: %d\n", width(data));
 
-%% -----------------------------
-% 1 Remove Duplicate Rows
-%% -----------------------------
-
-disp("Removing duplicate rows...")
-
+%% ===============================
+% 1. REMOVE DUPLICATES
+%% ===============================
+disp("Removing duplicates...")
 data = unique(data);
 
-fprintf("Samples after duplicate removal: %d\n", height(data));
+%% ===============================
+% 2. REMOVE IRRELEVANT COLUMNS
+%% ===============================
+cols_to_remove = {'Timestamp','Flow ID','Src IP','Dst IP','Source IP','Destination IP'};
 
+for i = 1:length(cols_to_remove)
+    if any(strcmp(data.Properties.VariableNames, cols_to_remove{i}))
+        data.(cols_to_remove{i}) = [];
+    end
+end
 
-%% -----------------------------
-% 2 Handle Infinite Values
-%% -----------------------------
-
-disp("Handling Inf values...")
-
-X = data(:,1:end-1);
-
-X = table2array(X);
-
-X(isinf(X)) = NaN;
-
-
-%% -----------------------------
-% 3 Handle Missing Values
-%% -----------------------------
-
-disp("Handling missing values...")
-
-X = fillmissing(X,'median');
-
-
-%% -----------------------------
-% 4 Separate Labels
-%% -----------------------------
-
-disp("Extracting labels...")
-
+%% ===============================
+% 3. EXTRACT LABELS
+%% ===============================
 labels = data{:,end};
 
+if iscell(labels) || isstring(labels)
+    labels = categorical(labels);
+end
 
-%% -----------------------------
-% 5 Encode Labels
-%% -----------------------------
+if iscategorical(labels)
+    Y = double(labels ~= 'BENIGN');   % 0 = benign, 1 = attack
+else
+    Y = double(labels);
+end
 
-disp("Encoding labels...")
+%% ===============================
+% 4. BALANCED SAMPLING (OPTIONAL)
+%% ===============================
+disp("Applying controlled sampling...")
 
-[unique_labels,~,label_encoded] = unique(labels);
+samples_per_class = 8000;  % slightly higher for better learning
 
-Y = label_encoded;
+benign_idx = find(Y == 0);
+attack_idx = find(Y == 1);
 
-fprintf("Number of Classes: %d\n", length(unique_labels));
+n_benign = min(samples_per_class, length(benign_idx));
+n_attack = min(samples_per_class, length(attack_idx));
 
+benign_idx = benign_idx(randperm(length(benign_idx), n_benign));
+attack_idx = attack_idx(randperm(length(attack_idx), n_attack));
 
-%% -----------------------------
-% 6 Remove Zero Variance Features
-%% -----------------------------
+idx = [benign_idx; attack_idx];
 
+data_small = data(idx,1:end-1);
+Y = Y(idx);
+
+%% ===============================
+% 5. CONVERT TO NUMERIC
+%% ===============================
+disp("Converting features to numeric...")
+
+X = zeros(height(data_small), width(data_small));
+
+for i = 1:width(data_small)
+
+    col = data_small{:,i};
+
+    if iscell(col) || isstring(col)
+        col = str2double(col);
+    elseif iscategorical(col)
+        col = double(col);
+    elseif islogical(col)
+        col = double(col);
+    elseif isdatetime(col)
+        col = posixtime(col);
+    end
+
+    X(:,i) = double(col);
+end
+
+%% ===============================
+% 6. HANDLE INF VALUES
+%% ===============================
+disp("Handling Inf values...")
+X(isinf(X)) = NaN;
+
+%% ===============================
+% 7. HANDLE MISSING VALUES (MEDIAN)
+%% ===============================
+disp("Handling missing values using median...")
+
+for i = 1:size(X,2)
+    col = X(:,i);
+    col(isnan(col)) = median(col(~isnan(col)));
+    X(:,i) = col;
+end
+
+%% ===============================
+% 8. REMOVE ZERO VARIANCE FEATURES
+%% ===============================
 disp("Removing zero variance features...")
 
-variance = var(X);
-
-X(:,variance==0) = [];
+v = var(X);
+X(:,v == 0) = [];
 
 fprintf("Remaining Features: %d\n", size(X,2));
 
-
-%% -----------------------------
-% 7 Normalization (Min-Max)
-%% -----------------------------
-
-disp("Normalizing features...")
-
-X = (X - min(X)) ./ (max(X) - min(X) + eps);
-
-
-%% -----------------------------
-% 8 SMART SAMPLING (IMPORTANT)
-%% -----------------------------
-% CICIDS2018 has millions of rows
-% We keep balanced samples from each class
-
-disp("Applying smart sampling...")
-
-samples_per_class = 5000;   % adjustable
-
-X_sampled = [];
-Y_sampled = [];
-
-classes = unique(Y);
-
-for i = 1:length(classes)
-
-    idx = find(Y == classes(i));
-
-    if length(idx) > samples_per_class
-        idx = idx(randperm(length(idx), samples_per_class));
-    end
-
-    X_sampled = [X_sampled; X(idx,:)];
-    Y_sampled = [Y_sampled; Y(idx)];
-
-end
-
-fprintf("Sampled Dataset Size: %d samples\n", length(Y_sampled));
-
-
-%% -----------------------------
-% 9 Train Test Split
-%% -----------------------------
-
+%% ===============================
+% 9. TRAIN-TEST SPLIT (NO LEAKAGE)
+%% ===============================
 disp("Splitting dataset...")
 
-cv = cvpartition(Y_sampled,'HoldOut',0.3);
+n = length(Y);
+idx = randperm(n);
 
-Xtrain = X_sampled(training(cv),:);
-Ytrain = Y_sampled(training(cv));
+train_size = round(0.7 * n);
 
-Xtest = X_sampled(test(cv),:);
-Ytest = Y_sampled(test(cv));
+train_idx = idx(1:train_size);
+test_idx = idx(train_size+1:end);
+
+Xtrain = X(train_idx,:);
+Ytrain = Y(train_idx);
+
+Xtest = X(test_idx,:);
+Ytest = Y(test_idx);
 
 fprintf("Training Samples: %d\n", length(Ytrain));
 fprintf("Testing Samples: %d\n", length(Ytest));
 
+%% ===============================
+% 10. NORMALIZATION (AFTER SPLIT)
+%% ===============================
+disp("Normalizing data (NO DATA LEAKAGE)...")
 
-%% -----------------------------
-% 10 Save Processed Dataset
-%% -----------------------------
+min_val = min(Xtrain);
+max_val = max(Xtrain);
 
-save('processed_dataset.mat','Xtrain','Ytrain','Xtest','Ytest','unique_labels','-v7.3')
+Xtrain = (Xtrain - min_val) ./ (max_val - min_val + eps);
+Xtest  = (Xtest  - min_val) ./ (max_val - min_val + eps);
+
+%% ===============================
+% 11. SAVE DATA
+%% ===============================
+save('processed_dataset.mat','Xtrain','Ytrain','Xtest','Ytest','-v7.3')
 
 disp("Preprocessing completed successfully.")
